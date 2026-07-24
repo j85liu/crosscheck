@@ -19,7 +19,7 @@ from anthropic import Anthropic
 _client: Anthropic | None = None
 
 SPECIALIST_MODEL = "claude-haiku-4-5-20251001"
-REASONING_MODEL = "claude-sonnet-4-6"
+REASONING_MODEL = "claude-sonnet-5"
 
 
 def get_client() -> Anthropic:
