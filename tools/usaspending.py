@@ -33,6 +33,7 @@ def get_recent_awards(ticker: str, limit: int = 10) -> dict:
             "Recipient Name",
             "Award Amount",
             "Award Type",
+            "Action Date",
             "Start Date",
             "Description",
             "Awarding Agency",
