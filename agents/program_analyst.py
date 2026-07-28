@@ -15,16 +15,16 @@ from schemas.models import ProgramAnalysis
 from tools.usaspending import get_recent_awards
 
 PROMPT_TEMPLATE = """You are a defense program analyst. Below are recent federal contract
-awards for {company_name} ({ticker}). The "Action Date" is when this specific award/
-modification actually occurred — use that for recency, not any period-of-performance dates
-mentioned in the description. Some of these are large IDV/base contract modifications, so
-the underlying program may be old even if the action itself is recent.
+awards for {company_name} ({ticker}). "Start Date" is the award's period-of-performance
+start date, not necessarily when the underlying news/announcement happened — USASpending's
+award-summary API doesn't expose a true last-action/modification date, so treat this as an
+approximation of recency, not an exact one.
 
 {awards_list}
 
 Identify the most significant events (large dollar value, or notable program/agency).
 Mark significance="major" only for awards that stand out meaningfully from the rest.
-Use each award's Action Date as the "date" field in your output.
+Use each award's Start Date as the "date" field in your output.
 
 Respond with ONLY this JSON structure, no other text:
 {{
@@ -45,7 +45,8 @@ def run(ticker: str) -> ProgramAnalysis:
 
     awards_list = "\n".join(
         f"- ${a.get('Award Amount', 'N/A')}: {a.get('Description', 'No description')[:120]} "
-        f"(Agency: {a.get('Awarding Agency', 'N/A')}, Action Date: {a.get('Action Date', 'N/A')})"
+        f"(Agency: {a.get('Awarding Agency', 'N/A')}, Type: {a.get('Contract Award Type', 'N/A')}, "
+        f"Start Date: {a.get('Start Date', 'N/A')})"
         for a in raw["awards"]
     )
 
