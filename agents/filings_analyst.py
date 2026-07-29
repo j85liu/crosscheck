@@ -34,7 +34,9 @@ Respond with ONLY this JSON structure, no other text:
   "overall_sentiment": "positive" | "negative" | "neutral" | "mixed",
   "highlights": [
     {{"topic": "...", "detail": "...", "sentiment": "positive"|"negative"|"neutral",
-      "source_form": "...", "filed_date": "YYYY-MM-DD"}}
+      "source_form": "...",
+      "filed_date": "YYYY-MM-DD" (must exactly match one of the filing dates listed
+      above — never a date range or a reporting period)}}
   ],
   "summary": "2-3 sentence plain-language summary"
 }}
