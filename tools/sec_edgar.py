@@ -15,10 +15,13 @@ BASE_HEADERS = {"User-Agent": USER_AGENT}
 # You look these up once at https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany
 # Defense/aero tickers we're targeting:
 KNOWN_CIKS = {
-    "LMT": "0000936468",   # Lockheed Martin
-    "RTX": "0000101829",   # RTX Corporation
-    "NOC": "0001133421",   # Northrop Grumman
-    "RKLB": "0001819994",  # Rocket Lab
+    "LMT": "0000936468",    # Lockheed Martin
+    "RTX": "0000101829",    # RTX Corporation
+    "NOC": "0001133421",    # Northrop Grumman
+    "RKLB": "0001819994",   # Rocket Lab
+    "BA": "0000012927",     # Boeing
+    "GD": "0000040533",     # General Dynamics
+    "SPCX": "0001181412",   # Space Exploration Technologies (SpaceX), IPO'd June 2026
 }
 
 

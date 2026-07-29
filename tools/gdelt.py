@@ -25,6 +25,9 @@ SEARCH_TERMS = {
     "RTX": "RTX Corporation OR Raytheon",
     "NOC": "Northrop Grumman",
     "RKLB": "Rocket Lab",
+    "BA": "Boeing",
+    "GD": "General Dynamics",
+    "SPCX": "SpaceX",
 }
 
 
@@ -49,7 +52,17 @@ def _get_with_retry(params: dict, max_retries: int = 4) -> dict:
             delay *= 2
             continue
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except json.JSONDecodeError:
+            # GDELT occasionally returns HTTP 200 with an empty body (seen right after
+            # a 429), instead of a clean error — treat it as transient and retry.
+            if attempt == max_retries - 1:
+                raise RuntimeError("GDELT returned an empty/invalid response after retries.")
+            print(f"GDELT returned an empty response, waiting {delay}s before retry...")
+            time.sleep(delay)
+            delay *= 2
+            continue
         cache_file.write_text(json.dumps(data))
         return data
 
