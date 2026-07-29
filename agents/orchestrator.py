@@ -10,9 +10,10 @@ most common agentic graph shapes.
 Run this directly to process one ticker end to end.
 """
 
+import operator
 import sys
 from pathlib import Path
-from typing import TypedDict
+from typing import Annotated, TypedDict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -37,7 +38,10 @@ class GraphState(TypedDict, total=False):
     sentiment: SentimentAnalysis
     risk: RiskAnalysis
     osint: OSINTAnalysis
-    errors: list[str]
+    # Annotated + operator.add: multiple specialist nodes can fail in the same fan-out
+    # step, and without a reducer LangGraph can't merge concurrent writes to this key
+    # (raises INVALID_CONCURRENT_GRAPH_UPDATE). operator.add concatenates the lists.
+    errors: Annotated[list[str], operator.add]
     report: SynthesisReport
 
 
@@ -47,9 +51,7 @@ def _run_agent_safely(agent_module, state: GraphState, key: str) -> dict:
         result = agent_module.run(state["ticker"])
         return {key: result}
     except Exception as e:
-        errors = state.get("errors", [])
-        errors.append(f"{agent_module.__name__} failed: {e}")
-        return {"errors": errors}
+        return {"errors": [f"{agent_module.__name__} failed: {e}"]}
 
 
 def filings_node(state: GraphState) -> dict:
