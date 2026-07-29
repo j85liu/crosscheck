@@ -35,13 +35,7 @@ def get_client() -> Anthropic:
     return _client
 
 
-def structured_call(prompt: str, model: str, max_tokens: int = 1024) -> dict:
-    """
-    Call Claude and ask for a JSON-only response, then parse it.
-
-    Keep the prompt itself explicit about wanting ONLY JSON — no preamble,
-    no markdown fences — since we parse the raw text directly.
-    """
+def _call_and_parse(prompt: str, model: str, max_tokens: int) -> dict:
     client = get_client()
     response = client.messages.create(
         model=model,
@@ -56,6 +50,21 @@ def structured_call(prompt: str, model: str, max_tokens: int = 1024) -> dict:
         if text.startswith("json"):
             text = text[4:]
     return json.loads(text.strip())
+
+
+def structured_call(prompt: str, model: str, max_tokens: int = 1024) -> dict:
+    """
+    Call Claude and ask for a JSON-only response, then parse it.
+
+    Keep the prompt itself explicit about wanting ONLY JSON — no preamble,
+    no markdown fences — since we parse the raw text directly. Retries once
+    on a JSON parse failure, since that's usually just a one-off malformed
+    sample rather than a systematic problem with the prompt.
+    """
+    try:
+        return _call_and_parse(prompt, model, max_tokens)
+    except json.JSONDecodeError:
+        return _call_and_parse(prompt, model, max_tokens)
 
 
 if __name__ == "__main__":
