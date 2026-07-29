@@ -44,7 +44,7 @@ def run(ticker: str) -> ProgramAnalysis:
     raw = get_recent_awards(ticker, limit=10)
 
     awards_list = "\n".join(
-        f"- ${a.get('Award Amount', 'N/A')}: {a.get('Description', 'No description')[:120]} "
+        f"- ${a.get('Award Amount', 'N/A')}: {(a.get('Description') or 'No description')[:120]} "
         f"(Agency: {a.get('Awarding Agency', 'N/A')}, Type: {a.get('Contract Award Type', 'N/A')}, "
         f"Start Date: {a.get('Start Date', 'N/A')})"
         for a in raw["awards"]
