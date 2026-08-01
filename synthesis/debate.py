@@ -88,7 +88,7 @@ def run(
         osint_section=osint_section,
     )
 
-    result_dict = structured_call(prompt, model=REASONING_MODEL, max_tokens=1536)
+    result_dict = structured_call(prompt, model=REASONING_MODEL, max_tokens=3072)
     return SynthesisReport(**result_dict)
 
 
