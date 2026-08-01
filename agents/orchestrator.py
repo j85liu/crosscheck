@@ -77,19 +77,24 @@ def osint_node(state: GraphState) -> dict:
 def synthesis_node(state: GraphState) -> dict:
     missing = [k for k in ("filings", "program", "sentiment", "risk") if k not in state]
     if missing:
-        raise RuntimeError(
-            f"Cannot synthesize — missing outputs from: {missing}. "
-            f"Errors so far: {state.get('errors', [])}"
+        return {
+            "errors": [
+                f"synthesis.debate skipped — missing outputs from: {missing}. "
+                f"Errors so far: {state.get('errors', [])}"
+            ]
+        }
+    try:
+        report = debate.run(
+            ticker=state["ticker"],
+            filings=state["filings"],
+            program=state["program"],
+            sentiment=state["sentiment"],
+            risk=state["risk"],
+            osint=state.get("osint"),
         )
-    report = debate.run(
-        ticker=state["ticker"],
-        filings=state["filings"],
-        program=state["program"],
-        sentiment=state["sentiment"],
-        risk=state["risk"],
-        osint=state.get("osint"),
-    )
-    return {"report": report}
+        return {"report": report}
+    except Exception as e:
+        return {"errors": [f"{debate.__name__} failed: {e}"]}
 
 
 def build_graph():
