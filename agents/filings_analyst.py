@@ -1,10 +1,11 @@
 """
 Filings analyst agent.
 
-Pulls recent SEC filings metadata for a ticker, then uses Claude to produce
-a structured FilingsAnalysis (see schemas/models.py). Note this v1 works off
-filing *metadata* (form type, date) rather than full document text — pulling
-and parsing full 10-K text is a natural next step once this loop works.
+Pulls recent SEC filings metadata plus structured XBRL financial figures (revenue,
+net income, EPS, operating income) for a ticker, then uses Claude to produce a
+structured FilingsAnalysis (see schemas/models.py). It still doesn't see the
+qualitative sections of a filing (MD&A, risk factors, notes) — pulling and
+parsing full filing text is a natural next step once this loop works.
 """
 
 import sys
@@ -14,18 +15,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from llm.client import SPECIALIST_MODEL, structured_call
 from schemas.models import FilingsAnalysis
-from tools.sec_edgar import get_company_filings
+from tools.sec_edgar import get_company_facts, get_company_filings
+
+METRIC_LABELS = {
+    "Revenues": "Revenue",
+    "NetIncomeLoss": "Net Income",
+    "EarningsPerShareDiluted": "Diluted EPS",
+    "OperatingIncomeLoss": "Operating Income",
+}
 
 PROMPT_TEMPLATE = """You are a financial filings analyst. Below is a list of recent SEC filings
-for {company_name} ({ticker}).
+and recent reported financial figures for {company_name} ({ticker}).
 
 Filings:
 {filings_list}
 
-Based on the filing types and dates alone (you do not have the full document text yet),
-produce a brief structured analysis. Since you only have metadata, keep highlights
-general (e.g. "Company filed a 10-K, suggesting annual results were reported") and note
-that a deeper read of the actual filing content would refine this.
+Recent financial figures (most recent period first, from SEC XBRL structured data):
+{financials}
+
+Use the financial figures to call out real trends (e.g. revenue or margin growth/decline
+period over period) as concrete highlights — you have real numbers, so don't hedge on
+them. You still don't have the qualitative sections of these filings (MD&A, risk factors,
+notes), so don't invent qualitative detail beyond what the numbers and filing types
+support.
 
 Respond with ONLY this JSON structure, no other text:
 {{
@@ -43,8 +55,33 @@ Respond with ONLY this JSON structure, no other text:
 """
 
 
+def _format_usd(concept: str, value: float) -> str:
+    if concept == "EarningsPerShareDiluted":
+        return f"${value:.2f}"
+    sign, abs_value = ("-", -value) if value < 0 else ("", value)
+    if abs_value >= 1e9:
+        return f"{sign}${abs_value / 1e9:.1f}B"
+    if abs_value >= 1e6:
+        return f"{sign}${abs_value / 1e6:.1f}M"
+    return f"{sign}${abs_value:,.0f}"
+
+
+def _format_financials(metrics: dict[str, list[dict]]) -> str:
+    if not metrics:
+        return "No structured financial data available."
+    lines = []
+    for concept, periods in metrics.items():
+        label = METRIC_LABELS.get(concept, concept)
+        trend = ", ".join(
+            f"{_format_usd(concept, p['value'])} ({p['period_end']}, {p['form']})" for p in periods
+        )
+        lines.append(f"- {label}: {trend}")
+    return "\n".join(lines)
+
+
 def run(ticker: str) -> FilingsAnalysis:
     raw = get_company_filings(ticker, form_types=["10-K", "10-Q", "8-K"], limit=5)
+    facts = get_company_facts(ticker)
 
     filings_list = "\n".join(
         f"- {f['form']} filed {f['filingDate']}" for f in raw["filings"]
@@ -53,6 +90,7 @@ def run(ticker: str) -> FilingsAnalysis:
         company_name=raw["company_name"],
         ticker=raw["ticker"],
         filings_list=filings_list or "No recent filings found.",
+        financials=_format_financials(facts["metrics"]),
     )
 
     result_dict = structured_call(prompt, model=SPECIALIST_MODEL, max_tokens=1024)
