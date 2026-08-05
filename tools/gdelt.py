@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import requests
+from bs4 import BeautifulSoup
 
 BASE_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
@@ -69,8 +70,29 @@ def _get_with_retry(params: dict, max_retries: int = 4) -> dict:
     raise RuntimeError("GDELT request failed after retries.")
 
 
+def _avg_tone(query_term: str) -> tuple[float | None, int]:
+    """
+    GDELT's artlist mode (used by get_recent_articles) doesn't include a per-article
+    tone score — tone is only exposed in aggregate via mode=tonechart, a histogram of
+    {bin: tone value, count: articles at that tone} over the full matching set for the
+    query (not capped by maxrecords). Compute a count-weighted average from that.
+    """
+    params = {"query": query_term, "mode": "tonechart", "format": "json"}
+    data = _get_with_retry(params)
+    bins = data.get("tonechart", [])
+    total_count = sum(b.get("count", 0) for b in bins)
+    if total_count == 0:
+        return None, 0
+    weighted_sum = sum(b.get("bin", 0) * b.get("count", 0) for b in bins)
+    return weighted_sum / total_count, total_count
+
+
 def get_recent_articles(ticker: str, max_records: int = 20) -> dict:
-    """Fetch recent news articles mentioning the company, with GDELT's tone score."""
+    """
+    Fetch recent news articles mentioning the company (headline, url, domain,
+    sourcecountry, etc. — whatever GDELT's artlist response includes), plus an
+    aggregate tone score computed separately (see _avg_tone).
+    """
     query_term = SEARCH_TERMS.get(ticker.upper())
     if not query_term:
         raise ValueError(f"No search term mapped for {ticker}. Add it to SEARCH_TERMS in tools/gdelt.py")
@@ -84,12 +106,35 @@ def get_recent_articles(ticker: str, max_records: int = 20) -> dict:
     }
 
     data = _get_with_retry(params)
+    avg_tone, tone_sample_size = _avg_tone(query_term)
 
     return {
         "ticker": ticker.upper(),
         "query_term": query_term,
         "articles": data.get("articles", []),
+        "avg_tone": avg_tone,
+        "tone_sample_size": tone_sample_size,
     }
+
+
+def get_article_text(url: str, max_chars: int = 1500) -> str | None:
+    """
+    Best-effort fetch of an article's main visible text. Paywalls, JS-rendered pages,
+    timeouts, and dead links are all expected here and should not crash the pipeline —
+    any failure just returns None so the caller can skip that article.
+    """
+    try:
+        resp = requests.get(
+            url, timeout=10, headers={"User-Agent": "Mozilla/5.0 (CrossCheck research bot)"}
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        text = " ".join(soup.get_text(separator=" ").split())
+        return text[:max_chars] if text else None
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":
@@ -97,3 +142,10 @@ if __name__ == "__main__":
     print(f"Found {len(result['articles'])} recent articles for {result['query_term']}:")
     for a in result["articles"][:5]:
         print(f"  {a.get('seendate')}  {a.get('title', '')[:70]}")
+    print(f"\nAvg tone: {result['avg_tone']} (over {result['tone_sample_size']} articles)")
+
+    if result["articles"]:
+        first_url = result["articles"][0]["url"]
+        text = get_article_text(first_url)
+        print(f"\nFetched text from {first_url}:")
+        print(text[:300] if text else "(fetch failed — None)")

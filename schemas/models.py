@@ -73,6 +73,9 @@ class SentimentAnalysis(BaseModel):
     overall_sentiment: Literal["positive", "negative", "neutral", "mixed"]
     key_themes: list[str] = Field(..., description="Short phrases capturing what news/commentary is focused on")
     sentiment_trend: Literal["improving", "stable", "worsening"] = "stable"
+    avg_gdelt_tone: float | None = Field(
+        None, description="Count-weighted average GDELT tone score for the query, if available"
+    )
     summary: str
 
 
