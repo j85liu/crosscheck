@@ -27,7 +27,7 @@ from schemas.models import (
     SynthesisReport,
 )
 
-PROMPT_TEMPLATE = """You are a senior research analyst reviewing findings from four specialist
+PROMPT_TEMPLATE = """You are a senior research analyst reviewing findings from several specialist
 analysts on {ticker}. Your job is to synthesize their findings into one coherent view AND
 explicitly flag any contradictions between what they found — this is the most important
 part of your job. Don't smooth over disagreements; surface them.
@@ -48,9 +48,12 @@ part of your job. Don't smooth over disagreements; surface them.
 
 Look specifically for cases like: positive filings/contract news but negative or unchanged
 market sentiment/volatility (possible market skepticism or lag), or negative fundamentals
-with unexplained bullish sentiment (possible overreaction). A contradiction is only worth
-flagging if it's a genuine, specific disagreement — not just "different agents mentioned
-different things."
+with unexplained bullish sentiment (possible overreaction). If OSINT/geopolitical findings
+are present above, cross-check them against the other four too — e.g. does a geopolitical
+risk or opportunity story align with what filings/program/sentiment/risk are already
+showing, or does it suggest something the market hasn't priced in yet? A contradiction is
+only worth flagging if it's a genuine, specific disagreement — not just "different agents
+mentioned different things."
 
 Respond with ONLY this JSON structure, no other text:
 {{
