@@ -95,6 +95,16 @@ def run_ticker(ticker: str) -> None:
     else:
         print("  Contradictions flagged: none")
 
+    flagged = [f for f in report.verification_flags if f.status != "supported"]
+    if flagged:
+        print(f"\n  ⚠️  Self-check caught {len(flagged)} unsupported/overstated claim(s):")
+        for f in flagged:
+            tag = "REMOVED" if f.status == "unsupported" else "SOFTENED"
+            print(f'    - [{tag}] "{f.claim}"')
+            print(f"        {f.note}")
+            if f.status == "overstated" and f.corrected_claim:
+                print(f'        -> corrected to: "{f.corrected_claim}"')
+
 
 def main() -> None:
     tickers = [t.upper() for t in sys.argv[1:]]
