@@ -95,6 +95,22 @@ class Contradiction(BaseModel):
     severity: Literal["high", "medium", "low"] = "medium"
 
 
+class VerificationFlag(BaseModel):
+    """A claim from the synthesis report checked against its cited source."""
+
+    claim: str = Field(..., description="The specific claim being checked, verbatim from the draft report")
+    status: Literal["supported", "unsupported", "overstated"] = Field(
+        ...,
+        description="supported = source backs this up; unsupported = no evidence in source; "
+        "overstated = source has related info but this claim goes beyond what it actually says",
+    )
+    note: str = Field(..., description="Brief explanation of the verification finding")
+    corrected_claim: str | None = Field(
+        None,
+        description="For status=overstated: a corrected version of the claim scoped to what the source actually supports",
+    )
+
+
 class SynthesisReport(BaseModel):
     """Final output of the synthesis/debate step — this is the actual deliverable."""
 
@@ -104,6 +120,9 @@ class SynthesisReport(BaseModel):
     key_findings: list[str] = Field(..., description="Bulleted findings merged across agents, in plain language")
     contradictions: list[Contradiction] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list, description="Which agents contributed data")
+    verification_flags: list[VerificationFlag] = Field(
+        default_factory=list, description="Self-check results from the critic pass; empty if verification hasn't run"
+    )
 
 
 class AgentRun(BaseModel):
