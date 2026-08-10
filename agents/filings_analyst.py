@@ -39,13 +39,20 @@ them. You still don't have the qualitative sections of these filings (MD&A, risk
 notes), so don't invent qualitative detail beyond what the numbers and filing types
 support.
 
+Each individual highlight's "sentiment" must be exactly one of "positive", "negative", or
+"neutral" — never "mixed". If a single filing event or figure has both positive and
+negative implications (e.g. revenue grew but margins compressed), split it into two
+separate highlight entries, one per fact, each with its own clear-cut sentiment — do not
+tag one highlight "mixed". Only the report-level "overall_sentiment" field below may be
+"mixed".
+
 Respond with ONLY this JSON structure, no other text:
 {{
   "ticker": "{ticker}",
   "company_name": "{company_name}",
   "overall_sentiment": "positive" | "negative" | "neutral" | "mixed",
   "highlights": [
-    {{"topic": "...", "detail": "...", "sentiment": "positive"|"negative"|"neutral",
+    {{"topic": "...", "detail": "...", "sentiment": "positive"|"negative"|"neutral" (never "mixed" — split into two highlights instead),
       "source_form": "...",
       "filed_date": "YYYY-MM-DD" (must exactly match one of the filing dates listed
       above — never a date range or a reporting period)}}
@@ -79,6 +86,27 @@ def _format_financials(metrics: dict[str, list[dict]]) -> str:
     return "\n".join(lines)
 
 
+VALID_HIGHLIGHT_SENTIMENTS = {"positive", "negative", "neutral"}
+
+
+def _normalize_highlight_sentiments(highlights: list[dict]) -> list[dict]:
+    """
+    Safety net for the prompt-level instruction above: the model is told individual
+    highlights must never be "mixed", but LLM output isn't guaranteed to comply, and
+    FilingHighlight.sentiment doesn't accept it — remap any invalid value to "neutral"
+    rather than letting one bad field crash the whole agent call.
+    """
+    for h in highlights:
+        sentiment = h.get("sentiment")
+        if sentiment not in VALID_HIGHLIGHT_SENTIMENTS:
+            print(
+                f"WARNING: filings_analyst got invalid highlight sentiment {sentiment!r} "
+                f"for topic {h.get('topic')!r} — remapping to 'neutral'."
+            )
+            h["sentiment"] = "neutral"
+    return highlights
+
+
 def run(ticker: str) -> FilingsAnalysis:
     raw = get_company_filings(ticker, form_types=["10-K", "10-Q", "8-K"], limit=5)
     facts = get_company_facts(ticker)
@@ -94,9 +122,11 @@ def run(ticker: str) -> FilingsAnalysis:
     )
 
     result_dict = structured_call(prompt, model=SPECIALIST_MODEL, max_tokens=1024)
+    result_dict["highlights"] = _normalize_highlight_sentiments(result_dict.get("highlights", []))
     return FilingsAnalysis(**result_dict)
 
 
 if __name__ == "__main__":
-    analysis = run("LMT")
+    ticker = sys.argv[1] if len(sys.argv) > 1 else "LMT"
+    analysis = run(ticker)
     print(analysis.model_dump_json(indent=2))
