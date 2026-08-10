@@ -104,3 +104,4 @@ def run(ticker: str) -> OSINTAnalysis:
 
 if __name__ == "__main__":
     print(run("LMT").model_dump_json(indent=2))
+
