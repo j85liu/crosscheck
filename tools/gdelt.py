@@ -87,16 +87,7 @@ def _avg_tone(query_term: str) -> tuple[float | None, int]:
     return weighted_sum / total_count, total_count
 
 
-def get_recent_articles(ticker: str, max_records: int = 20) -> dict:
-    """
-    Fetch recent news articles mentioning the company (headline, url, domain,
-    sourcecountry, etc. — whatever GDELT's artlist response includes), plus an
-    aggregate tone score computed separately (see _avg_tone).
-    """
-    query_term = SEARCH_TERMS.get(ticker.upper())
-    if not query_term:
-        raise ValueError(f"No search term mapped for {ticker}. Add it to SEARCH_TERMS in tools/gdelt.py")
-
+def _search(ticker: str, query_term: str, max_records: int) -> dict:
     params = {
         "query": query_term,
         "mode": "artlist",
@@ -115,6 +106,30 @@ def get_recent_articles(ticker: str, max_records: int = 20) -> dict:
         "avg_tone": avg_tone,
         "tone_sample_size": tone_sample_size,
     }
+
+
+def get_recent_articles(ticker: str, max_records: int = 20) -> dict:
+    """
+    Fetch recent news articles mentioning the company (headline, url, domain,
+    sourcecountry, etc. — whatever GDELT's artlist response includes), plus an
+    aggregate tone score computed separately (see _avg_tone). Uses SEARCH_TERMS'
+    default query for the ticker — see refine_search() to override it.
+    """
+    query_term = SEARCH_TERMS.get(ticker.upper())
+    if not query_term:
+        raise ValueError(f"No search term mapped for {ticker}. Add it to SEARCH_TERMS in tools/gdelt.py")
+    return _search(ticker, query_term, max_records)
+
+
+def refine_search(ticker: str, custom_query: str, max_records: int = 20) -> dict:
+    """
+    Same as get_recent_articles(), but with a caller-supplied query instead of the
+    default SEARCH_TERMS lookup — for when the default query's results are too noisy to
+    use as-is (off-topic articles, wrong company/language, forum/spam content) and a
+    tighter or differently-scoped query is warranted, e.g. narrowing "Lockheed Martin" to
+    '"Lockheed Martin" -stock -forum'. Same caching/retry pattern as get_recent_articles.
+    """
+    return _search(ticker, custom_query, max_records)
 
 
 def get_article_text(url: str, max_chars: int = 1500) -> str | None:

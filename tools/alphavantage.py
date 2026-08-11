@@ -9,6 +9,7 @@ so this module caches raw responses to data/cache/ to avoid re-hitting the API w
 import hashlib
 import json
 import os
+import statistics
 from pathlib import Path
 
 import requests
@@ -17,6 +18,10 @@ CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_URL = "https://www.alphavantage.co/query"
+
+# Defense/aero tickers this project covers — used as the default peer set for
+# get_peer_comparison() when the caller doesn't specify one.
+DEFENSE_AERO_TICKERS = ["LMT", "RTX", "NOC", "GD", "BA", "RKLB", "SPCX"]
 
 
 def _cache_path(params: dict) -> Path:
@@ -66,8 +71,6 @@ def compute_volatility_summary(ticker: str) -> dict:
     Returns raw numbers — the risk_analyst agent turns these into a structured
     write-up via the LLM.
     """
-    import statistics
-
     raw = get_daily_prices(ticker)
     series = raw.get("Time Series (Daily)")
     if not series:
@@ -98,5 +101,45 @@ def compute_volatility_summary(ticker: str) -> dict:
     }
 
 
+def get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None) -> dict:
+    """
+    Compute volatility summaries for a set of peer tickers alongside the target, so the
+    risk agent can judge whether an elevated volatility reading is company-specific or
+    sector-wide. Defaults to the other defense/aero tickers this project covers if
+    peer_tickers isn't given.
+
+    Each peer goes through compute_volatility_summary() -> get_daily_prices() -> _get(),
+    which already caches per-ticker to data/cache/ — no separate caching layer needed
+    here. A peer that fails (e.g. rate limit) is recorded with an "error" key rather than
+    aborting the whole comparison.
+    """
+    ticker = ticker.upper()
+    if peer_tickers is None:
+        peer_tickers = [t for t in DEFENSE_AERO_TICKERS if t != ticker]
+
+    peers = {}
+    for peer in peer_tickers:
+        peer = peer.upper()
+        if peer == ticker:
+            continue
+        try:
+            peers[peer] = compute_volatility_summary(peer)
+        except Exception as e:
+            peers[peer] = {"error": str(e)}
+
+    vols_30d = [
+        p["realized_volatility_30d"]
+        for p in peers.values()
+        if isinstance(p, dict) and p.get("realized_volatility_30d") is not None
+    ]
+
+    return {
+        "ticker": ticker,
+        "peers": peers,
+        "sector_avg_vol_30d": statistics.mean(vols_30d) if vols_30d else None,
+    }
+
+
 if __name__ == "__main__":
     print(compute_volatility_summary("LMT"))
+    print(get_peer_comparison("LMT"))
