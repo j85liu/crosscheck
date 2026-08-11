@@ -11,8 +11,8 @@ submit_final_answer, whose input_schema mirrors the caller's output_schema. The 
 instructed to call it exactly when it wants to end the task, which is an explicit signal
 instead of an inferred one.
 
-Not wired into any real agent yet — see llm/agent_loop.py's __main__ block for a
-standalone smoke test with a fake tool.
+See llm/agent_loop.py's __main__ block for a standalone smoke test with a fake tool
+(no real agent dependency). agents/filings_analyst.py is the first real caller.
 """
 
 import json
@@ -22,7 +22,7 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from llm.client import get_client
 
@@ -82,7 +82,31 @@ def run_tool_agent(
         tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
         submit_block = next((b for b in tool_use_blocks if b.name == SUBMIT_TOOL_NAME), None)
         if submit_block is not None:
-            return output_schema(**submit_block.input)
+            try:
+                return output_schema(**submit_block.input)
+            except ValidationError as e:
+                # The tool's input_schema (derived from output_schema) is a hint, not an
+                # enforced contract — Claude can still submit something that doesn't
+                # validate (e.g. an enum value outside what's allowed). Feed the error
+                # back so it can correct and resubmit, instead of crashing the whole
+                # agent over one malformed field.
+                print(f"[tool call] {SUBMIT_TOOL_NAME}(...) — validation failed, asking model to retry")
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": submit_block.id,
+                                "content": f"Your submission didn't match the required schema: {e} "
+                                f"Please fix it and call {SUBMIT_TOOL_NAME} again.",
+                                "is_error": True,
+                            }
+                        ],
+                    }
+                )
+                continue
 
         messages.append({"role": "assistant", "content": response.content})
 
