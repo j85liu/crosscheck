@@ -9,6 +9,7 @@ Docs: https://www.sec.gov/search-filings/edgar-application-programming-interface
 from datetime import date
 
 import requests
+from bs4 import BeautifulSoup
 
 USER_AGENT = "CrossCheck research project james.liu@columbia.edu"  # update with your info
 BASE_HEADERS = {"User-Agent": USER_AGENT}
@@ -191,6 +192,27 @@ def get_filing_document_url(ticker: str, accession_number: str, primary_document
     cik = KNOWN_CIKS.get(ticker.upper())
     accession_nodash = accession_number.replace("-", "")
     return f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_nodash}/{primary_document}"
+
+
+def get_filing_full_text(ticker: str, accession_number: str, primary_document: str, max_chars: int = 3000) -> str:
+    """
+    Fetch and extract the visible text of one filing's primary document, truncated to
+    max_chars. This is meant to be called mid agent-loop (an agent deciding a specific
+    filing warrants a closer look), so failures return a clear error string instead of
+    raising — the calling agent can see the failure and adapt (e.g. proceed without full
+    text) rather than the whole run crashing over one slow/unavailable document.
+    """
+    try:
+        url = get_filing_document_url(ticker, accession_number, primary_document)
+        resp = requests.get(url, headers=BASE_HEADERS, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        text = " ".join(soup.get_text(separator=" ").split())
+        return text[:max_chars] if text else "(document fetched but contained no visible text)"
+    except Exception as e:
+        return f"Error fetching filing full text: {e}"
 
 
 if __name__ == "__main__":
