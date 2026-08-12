@@ -45,7 +45,19 @@ def _cache_path(params: dict) -> Path:
     return CACHE_DIR / f"gdelt_{key}.json"
 
 
-def _get_with_retry(params: dict, max_retries: int = 4) -> dict:
+def _get_with_retry(params: dict, max_retries: int = 2) -> dict:
+    """
+    max_retries=2 (1 retry, ~5s worst case) rather than a deeper backoff: this is called
+    from inside an LLM agent loop (sentiment_analyst.py), where a failed call just becomes
+    a tool_result the model reacts to — the model itself can decide to retry again, so
+    retrying deeply here means paying a compounding tax (this function's own backoff,
+    times however many times the agent separately decides to retry the same call). Under
+    sustained heavy rate-limiting (observed directly: a single sentiment_analyst run hit
+    252s, dominated by 3 agent-level retries each paying this function's old 35s worst
+    case), failing fast here matters more than squeezing out one more retry — the agent
+    already has a graceful "proceed with no data" fallback for when a search never
+    succeeds, so there's little value in this layer trying harder on its own.
+    """
     cache_file = _cache_path(params)
     if cache_file.exists():
         return json.loads(cache_file.read_text())
