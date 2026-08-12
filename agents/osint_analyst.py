@@ -9,6 +9,7 @@ now and always returns None; this agent handles that gracefully.
 """
 
 import sys
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -67,7 +68,14 @@ def _format_events(events: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def run(ticker: str) -> OSINTAnalysis:
+def run(ticker: str, as_of_date: date | None = None) -> OSINTAnalysis:
+    # NOTE: tools/gdelt_events.py doesn't yet support as_of_date filtering (out of scope
+    # for the as_of_date rollout — only tools/{sec_edgar,alphavantage,usaspending,gdelt}.py
+    # were updated). as_of_date is accepted here purely for interface consistency with the
+    # orchestrator's uniform run(ticker, as_of_date) calling convention; it is NOT actually
+    # applied, so this agent's output should not be treated as point-in-time correct yet —
+    # it always reflects the real current geopolitical event window regardless of the
+    # requested cutoff.
     if not ENABLED:
         return OSINTAnalysis(
             ticker=ticker.upper(),
@@ -103,5 +111,6 @@ def run(ticker: str) -> OSINTAnalysis:
 
 
 if __name__ == "__main__":
-    print(run("LMT").model_dump_json(indent=2))
+    ticker = sys.argv[1] if len(sys.argv) > 1 else "LMT"
+    print(run(ticker).model_dump_json(indent=2))
 

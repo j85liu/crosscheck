@@ -8,6 +8,7 @@ structured ProgramAnalysis.
 """
 
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -65,9 +66,9 @@ def _format_frequency(freq: dict) -> str:
     )
 
 
-def run(ticker: str) -> ProgramAnalysis:
-    raw = get_recent_awards(ticker, limit=10)
-    freq = get_award_frequency(ticker)
+def run(ticker: str, as_of_date: date | None = None) -> ProgramAnalysis:
+    raw = get_recent_awards(ticker, limit=10, as_of_date=as_of_date)
+    freq = get_award_frequency(ticker, as_of_date=as_of_date)
 
     awards_list = "\n".join(
         f"- ${a.get('Award Amount', 'N/A')}: {(a.get('Description') or 'No description')[:120]} "
@@ -83,11 +84,18 @@ def run(ticker: str) -> ProgramAnalysis:
         months=freq["months"],
         frequency_summary=_format_frequency(freq),
     )
+    if as_of_date is not None:
+        prompt = (
+            f"You are analyzing data as of {as_of_date.isoformat()}. Do not reference or assume "
+            f"knowledge of anything after this date.\n\n{prompt}"
+        )
 
     result_dict = structured_call(prompt, model=SPECIALIST_MODEL, max_tokens=1024)
     return ProgramAnalysis(**result_dict)
 
 
 if __name__ == "__main__":
-    analysis = run("LMT")
+    ticker = sys.argv[1] if len(sys.argv) > 1 else "LMT"
+    as_of = date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else None
+    analysis = run(ticker, as_of_date=as_of)
     print(analysis.model_dump_json(indent=2))

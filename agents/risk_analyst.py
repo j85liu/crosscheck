@@ -7,7 +7,9 @@ warrants a peer/sector comparison before flagging an anomaly — company-specifi
 sector-wide moves should not both get flagged the same way.
 """
 
+import functools
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -79,25 +81,34 @@ TOOLS = [
 ]
 
 
-def _tool_get_volatility_summary(ticker: str) -> dict:
-    return compute_volatility_summary(ticker)
+def _tool_get_volatility_summary(ticker: str, as_of_date: date | None) -> dict:
+    return compute_volatility_summary(ticker, as_of_date=as_of_date)
 
 
-def _tool_get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None) -> dict:
-    return get_peer_comparison(ticker, peer_tickers)
+def _tool_get_peer_comparison(ticker: str, as_of_date: date | None, peer_tickers: list[str] | None = None) -> dict:
+    return get_peer_comparison(ticker, peer_tickers, as_of_date=as_of_date)
 
 
-TOOL_DISPATCH = {
-    "get_volatility_summary": _tool_get_volatility_summary,
-    "get_peer_comparison": _tool_get_peer_comparison,
-}
+def _build_tool_dispatch(as_of_date: date | None) -> dict:
+    # as_of_date is baked in via functools.partial, not exposed as a tool parameter — the
+    # LLM never sees or has to remember to pass it.
+    return {
+        "get_volatility_summary": functools.partial(_tool_get_volatility_summary, as_of_date=as_of_date),
+        "get_peer_comparison": functools.partial(_tool_get_peer_comparison, as_of_date=as_of_date),
+    }
 
 
-def run(ticker: str) -> RiskAnalysis:
+def run(ticker: str, as_of_date: date | None = None) -> RiskAnalysis:
+    system_prompt = SYSTEM_PROMPT
+    if as_of_date is not None:
+        system_prompt += (
+            f"\n\nYou are analyzing data as of {as_of_date.isoformat()}. Do not reference or "
+            "assume knowledge of anything after this date."
+        )
     return run_tool_agent(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         tools=TOOLS,
-        tool_dispatch=TOOL_DISPATCH,
+        tool_dispatch=_build_tool_dispatch(as_of_date),
         user_prompt=f"Assess recent price/volatility risk for {ticker}.",
         output_schema=RiskAnalysis,
         model=SPECIALIST_MODEL,
@@ -106,5 +117,6 @@ def run(ticker: str) -> RiskAnalysis:
 
 if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "LMT"
-    analysis = run(ticker)
+    as_of = date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else None
+    analysis = run(ticker, as_of_date=as_of)
     print(analysis.model_dump_json(indent=2))

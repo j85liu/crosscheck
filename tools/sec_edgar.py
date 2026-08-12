@@ -28,12 +28,18 @@ KNOWN_CIKS = {
 }
 
 
-def get_company_filings(ticker: str, form_types: list[str] | None = None, limit: int = 5) -> dict:
+def get_company_filings(
+    ticker: str, form_types: list[str] | None = None, limit: int = 5, as_of_date: date | None = None
+) -> dict:
     """
     Fetch recent filings metadata for a company.
 
     Returns a dict with keys like 'form', 'filingDate', 'accessionNumber', 'primaryDocument'
     for each recent filing, filtered to form_types if given (e.g. ["10-K", "10-Q", "8-K"]).
+
+    as_of_date, if given, excludes any filing dated after it — SEC's submissions feed is
+    already sorted most-recent-first, so this just skips entries newer than the cutoff
+    until it reaches ones at or before it, then takes `limit` from there.
     """
     cik = KNOWN_CIKS.get(ticker.upper())
     if not cik:
@@ -49,10 +55,13 @@ def get_company_filings(ticker: str, form_types: list[str] | None = None, limit:
     for i in range(len(recent["form"])):
         if form_types and recent["form"][i] not in form_types:
             continue
+        filing_date = recent["filingDate"][i]
+        if as_of_date is not None and date.fromisoformat(filing_date) > as_of_date:
+            continue
         filings.append(
             {
                 "form": recent["form"][i],
-                "filingDate": recent["filingDate"][i],
+                "filingDate": filing_date,
                 "accessionNumber": recent["accessionNumber"][i],
                 "primaryDocument": recent["primaryDocument"][i],
             }
@@ -65,6 +74,7 @@ def get_company_filings(ticker: str, form_types: list[str] | None = None, limit:
         "company_name": data.get("name", ticker),
         "cik": cik,
         "filings": filings,
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
     }
 
 
@@ -105,14 +115,22 @@ def _is_single_period(entry: dict) -> bool:
     return 80 <= days <= 100 or 350 <= days <= 380
 
 
-def _recent_periods(entries: list[dict], max_periods: int = 6) -> list[dict]:
+def _recent_periods(entries: list[dict], max_periods: int = 6, as_of_date: date | None = None) -> list[dict]:
     """
     Narrow raw XBRL fact entries down to a short, clean recent trend: annual/quarterly
     filings only (skip amended 10-K/A, 10-Q/A, and non-filing forms), single-quarter or
     single-year periods only (not YTD cumulative), one value per distinct reporting
     period (the most recently filed value, in case of restatement), most recent first.
+
+    as_of_date, if given, filters on each fact's 'filed' date — NOT its 'end' (fiscal
+    period end) date. A quarter that ENDED before as_of_date may not have been FILED yet
+    as of that date (e.g. Q2 ends in late June but isn't filed until late July) — filtering
+    on 'end' instead of 'filed' would leak look-ahead information nobody actually had on
+    that date, which defeats the point of point-in-time analysis.
     """
     filtered = [e for e in entries if e.get("form") in ("10-K", "10-Q") and _is_single_period(e)]
+    if as_of_date is not None:
+        filtered = [e for e in filtered if e.get("filed") and date.fromisoformat(e["filed"]) <= as_of_date]
 
     latest_by_period: dict[tuple, dict] = {}
     for e in filtered:
@@ -125,7 +143,7 @@ def _recent_periods(entries: list[dict], max_periods: int = 6) -> list[dict]:
     return periods[:max_periods]
 
 
-def get_company_facts(ticker: str, concepts: list[str] | None = None) -> dict:
+def get_company_facts(ticker: str, concepts: list[str] | None = None, as_of_date: date | None = None) -> dict:
     """
     Fetch recent structured financial figures ("company facts" XBRL data) for a company —
     actual reported numbers (revenue, net income, diluted EPS, operating income by default),
@@ -134,6 +152,9 @@ def get_company_facts(ticker: str, concepts: list[str] | None = None) -> dict:
     For each concept, returns up to the 6 most recent reported periods so callers get a
     short trend rather than the entire multi-year history. Concepts a company doesn't
     report under any known tag are silently omitted (see "missing_concepts" in the result).
+
+    as_of_date, if given, excludes facts not yet filed as of that date — see
+    _recent_periods for why this filters on 'filed' rather than the fiscal period's 'end'.
     """
     cik = KNOWN_CIKS.get(ticker.upper())
     if not cik:
@@ -144,7 +165,13 @@ def get_company_facts(ticker: str, concepts: list[str] | None = None) -> dict:
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     resp = requests.get(url, headers=BASE_HEADERS, timeout=15)
     if resp.status_code == 404:
-        return {"ticker": ticker.upper(), "cik": cik, "metrics": {}, "missing_concepts": concepts}
+        return {
+            "ticker": ticker.upper(),
+            "cik": cik,
+            "metrics": {},
+            "missing_concepts": concepts,
+            "as_of_date": as_of_date.isoformat() if as_of_date else None,
+        }
     resp.raise_for_status()
     data = resp.json()
 
@@ -170,13 +197,13 @@ def get_company_facts(ticker: str, concepts: list[str] | None = None) -> dict:
             missing.append(concept)
             continue
 
-        periods = _recent_periods(units[unit_key])
+        periods = _recent_periods(units[unit_key], as_of_date=as_of_date)
         if not periods:
             missing.append(concept)
             continue
 
         metrics[concept] = [
-            {"period_end": p["end"], "value": p["val"], "form": p["form"]} for p in periods
+            {"period_end": p["end"], "value": p["val"], "form": p["form"], "filed": p["filed"]} for p in periods
         ]
 
     return {
@@ -184,6 +211,7 @@ def get_company_facts(ticker: str, concepts: list[str] | None = None) -> dict:
         "cik": cik,
         "metrics": metrics,
         "missing_concepts": missing,
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
     }
 
 
@@ -194,13 +222,21 @@ def get_filing_document_url(ticker: str, accession_number: str, primary_document
     return f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_nodash}/{primary_document}"
 
 
-def get_filing_full_text(ticker: str, accession_number: str, primary_document: str, max_chars: int = 3000) -> str:
+def get_filing_full_text(
+    ticker: str, accession_number: str, primary_document: str, max_chars: int = 3000, as_of_date: date | None = None
+) -> str:
     """
     Fetch and extract the visible text of one filing's primary document, truncated to
     max_chars. This is meant to be called mid agent-loop (an agent deciding a specific
     filing warrants a closer look), so failures return a clear error string instead of
     raising — the calling agent can see the failure and adapt (e.g. proceed without full
     text) rather than the whole run crashing over one slow/unavailable document.
+
+    Accepts as_of_date for interface consistency with the other tools in this module, but
+    doesn't filter on it here: this function fetches one specific already-identified
+    filing (by accession_number/primary_document), and point-in-time correctness for
+    which filings are reachable at all is already enforced upstream, by get_company_filings
+    only returning accession numbers for filings at or before as_of_date in the first place.
     """
     try:
         url = get_filing_document_url(ticker, accession_number, primary_document)

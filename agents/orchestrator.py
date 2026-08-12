@@ -12,6 +12,7 @@ Run this directly to process one ticker end to end.
 
 import operator
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Annotated, TypedDict
 
@@ -33,6 +34,7 @@ from synthesis import debate
 
 class GraphState(TypedDict, total=False):
     ticker: str
+    as_of_date: date | None
     filings: FilingsAnalysis
     program: ProgramAnalysis
     sentiment: SentimentAnalysis
@@ -48,7 +50,7 @@ class GraphState(TypedDict, total=False):
 def _run_agent_safely(agent_module, state: GraphState, key: str) -> dict:
     """Wrap an agent call so one failing agent doesn't crash the whole graph."""
     try:
-        result = agent_module.run(state["ticker"])
+        result = agent_module.run(state["ticker"], as_of_date=state.get("as_of_date"))
         return {key: result}
     except Exception as e:
         return {"errors": [f"{agent_module.__name__} failed: {e}"]}
@@ -91,6 +93,7 @@ def synthesis_node(state: GraphState) -> dict:
             sentiment=state["sentiment"],
             risk=state["risk"],
             osint=state.get("osint"),
+            as_of_date=state.get("as_of_date"),
         )
         return {"report": report}
     except Exception as e:
@@ -123,9 +126,9 @@ def build_graph():
     return graph.compile()
 
 
-def run_for_ticker(ticker: str) -> GraphState:
+def run_for_ticker(ticker: str, as_of_date: date | None = None) -> GraphState:
     app = build_graph()
-    result = app.invoke({"ticker": ticker, "errors": []})
+    result = app.invoke({"ticker": ticker, "as_of_date": as_of_date, "errors": []})
     return result
 
 

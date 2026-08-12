@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import statistics
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -51,10 +52,20 @@ def _get(params: dict) -> dict:
     return data
 
 
-def get_daily_prices(ticker: str, outputsize: str = "compact") -> dict:
+def get_daily_prices(ticker: str, outputsize: str = "compact", as_of_date: date | None = None) -> dict:
     """
-    Fetch daily OHLCV data. outputsize='compact' gives ~100 most recent trading days,
-    which is enough for 30/90-day volatility calcs.
+    Fetch daily OHLCV data. outputsize='compact' gives the ~100 most recent trading days
+    FROM TODAY (roughly the trailing 4-5 months), which is enough for 30/90-day
+    volatility calcs when as_of_date is None — or recent enough as_of_dates that a full
+    90-trading-day window before it still falls inside that ~100-day span.
+
+    NOTE: outputsize='full' (multi-year history) would remove that limitation, but is a
+    premium-only feature on Alpha Vantage's free tier this project uses — confirmed live
+    (the API returns a paywall message, not data, for 'full' on a free key). So this
+    always uses 'compact' regardless of as_of_date; callers truncate client-side, and an
+    as_of_date old enough that fewer than 90 trading days remain before it will
+    gracefully get realized_volatility_90d=None (same as the existing "insufficient
+    history" behavior for None as_of_date), rather than erroring.
     """
     return _get(
         {
@@ -65,18 +76,27 @@ def get_daily_prices(ticker: str, outputsize: str = "compact") -> dict:
     )
 
 
-def compute_volatility_summary(ticker: str) -> dict:
+def compute_volatility_summary(ticker: str, as_of_date: date | None = None) -> dict:
     """
     Pull daily prices and compute basic realized volatility stats.
     Returns raw numbers — the risk_analyst agent turns these into a structured
     write-up via the LLM.
+
+    as_of_date, if given, truncates the price series to trading days at or before it
+    BEFORE computing anything — so "30-day" and "90-day" windows are relative to
+    as_of_date, not today, and latest_close is the close as of that date, not the
+    real most-recent close.
     """
-    raw = get_daily_prices(ticker)
+    raw = get_daily_prices(ticker, as_of_date=as_of_date)
     series = raw.get("Time Series (Daily)")
     if not series:
         raise RuntimeError(f"No price series returned for {ticker}: {raw}")
 
     dates_sorted = sorted(series.keys(), reverse=True)  # most recent first
+    if as_of_date is not None:
+        dates_sorted = [d for d in dates_sorted if date.fromisoformat(d) <= as_of_date]
+        if not dates_sorted:
+            raise RuntimeError(f"No price data for {ticker} at or before as_of_date={as_of_date.isoformat()}")
     closes = [float(series[d]["4. close"]) for d in dates_sorted]
 
     def realized_vol(window: int) -> float | None:
@@ -95,13 +115,15 @@ def compute_volatility_summary(ticker: str) -> dict:
     return {
         "ticker": ticker.upper(),
         "latest_close": closes[0],
+        "latest_close_date": dates_sorted[0],
         "realized_volatility_30d": realized_vol(30),
         "realized_volatility_90d": realized_vol(90) if len(closes) > 90 else None,
         "price_change_30d_pct": price_change_30d,
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
     }
 
 
-def get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None) -> dict:
+def get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None, as_of_date: date | None = None) -> dict:
     """
     Compute volatility summaries for a set of peer tickers alongside the target, so the
     risk agent can judge whether an elevated volatility reading is company-specific or
@@ -111,7 +133,8 @@ def get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None) -> d
     Each peer goes through compute_volatility_summary() -> get_daily_prices() -> _get(),
     which already caches per-ticker to data/cache/ — no separate caching layer needed
     here. A peer that fails (e.g. rate limit) is recorded with an "error" key rather than
-    aborting the whole comparison.
+    aborting the whole comparison. as_of_date is passed through to every peer so the
+    comparison is apples-to-apples for the same point in time.
     """
     ticker = ticker.upper()
     if peer_tickers is None:
@@ -123,7 +146,7 @@ def get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None) -> d
         if peer == ticker:
             continue
         try:
-            peers[peer] = compute_volatility_summary(peer)
+            peers[peer] = compute_volatility_summary(peer, as_of_date=as_of_date)
         except Exception as e:
             peers[peer] = {"error": str(e)}
 
@@ -137,6 +160,7 @@ def get_peer_comparison(ticker: str, peer_tickers: list[str] | None = None) -> d
         "ticker": ticker,
         "peers": peers,
         "sector_avg_vol_30d": statistics.mean(vols_30d) if vols_30d else None,
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
     }
 
 

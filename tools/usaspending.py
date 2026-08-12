@@ -21,17 +21,24 @@ RECIPIENT_NAMES = {
 }
 
 
-def get_recent_awards(ticker: str, limit: int = 10) -> dict:
-    """Fetch recent federal contract awards for a company by ticker."""
+def get_recent_awards(ticker: str, limit: int = 10, as_of_date: date | None = None) -> dict:
+    """
+    Fetch recent federal contract awards for a company by ticker.
+
+    as_of_date, if given, caps the search window's end_date — awards starting after it
+    are excluded, so the result reflects only what was knowable as of that date.
+    """
     recipient_name = RECIPIENT_NAMES.get(ticker.upper())
     if not recipient_name:
         raise ValueError(f"No recipient name mapped for {ticker}. Add it to RECIPIENT_NAMES in tools/usaspending.py")
+
+    end_date = (as_of_date or date.today()).isoformat()
 
     payload = {
         "filters": {
             "recipient_search_text": [recipient_name],
             "award_type_codes": ["A", "B", "C", "D"],  # contract types
-            "time_period": [{"start_date": "2024-01-01", "end_date": "2026-12-31"}],
+            "time_period": [{"start_date": "2024-01-01", "end_date": end_date}],
         },
         "fields": [
             "Award ID",
@@ -55,10 +62,11 @@ def get_recent_awards(ticker: str, limit: int = 10) -> dict:
         "ticker": ticker.upper(),
         "recipient_name": recipient_name,
         "awards": data.get("results", []),
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
     }
 
 
-def get_award_frequency(ticker: str, months: int = 12, limit: int = 100) -> dict:
+def get_award_frequency(ticker: str, months: int = 12, limit: int = 100, as_of_date: date | None = None) -> dict:
     """
     Fetch awards sorted by recency (Start Date) rather than dollar value, as a cadence
     signal — is this a steady drip of smaller awards or one/few mega-contracts? — distinct
@@ -68,13 +76,17 @@ def get_award_frequency(ticker: str, months: int = 12, limit: int = 100) -> dict
     the page of results requested, so award_count_trailing reflects up to `limit` awards
     in the window; "count_capped" is True if there may be more than that (check
     page_metadata.hasNext).
+
+    as_of_date, if given, is used as the reference "now" for both the trailing-months
+    start_date and the end_date, instead of today.
     """
     recipient_name = RECIPIENT_NAMES.get(ticker.upper())
     if not recipient_name:
         raise ValueError(f"No recipient name mapped for {ticker}. Add it to RECIPIENT_NAMES in tools/usaspending.py")
 
-    start_date = (date.today() - timedelta(days=months * 30)).isoformat()
-    end_date = date.today().isoformat()
+    reference_date = as_of_date or date.today()
+    start_date = (reference_date - timedelta(days=months * 30)).isoformat()
+    end_date = reference_date.isoformat()
 
     payload = {
         "filters": {

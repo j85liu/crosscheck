@@ -8,7 +8,9 @@ what order, given three tools — filing metadata, structured XBRL financial fig
 when full text is actually warranted.
 """
 
+import functools
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -104,30 +106,42 @@ TOOLS = [
 ]
 
 
-def _tool_get_filings_metadata(ticker: str) -> dict:
-    return get_company_filings(ticker, form_types=["10-K", "10-Q", "8-K"], limit=5)
+def _tool_get_filings_metadata(ticker: str, as_of_date: date | None) -> dict:
+    return get_company_filings(ticker, form_types=["10-K", "10-Q", "8-K"], limit=5, as_of_date=as_of_date)
 
 
-def _tool_get_financial_facts(ticker: str) -> dict:
-    return get_company_facts(ticker)
+def _tool_get_financial_facts(ticker: str, as_of_date: date | None) -> dict:
+    return get_company_facts(ticker, as_of_date=as_of_date)
 
 
-def _tool_get_filing_full_text(ticker: str, accession_number: str, primary_document: str) -> str:
-    return get_filing_full_text(ticker, accession_number, primary_document)
+def _tool_get_filing_full_text(
+    ticker: str, accession_number: str, primary_document: str, as_of_date: date | None
+) -> str:
+    return get_filing_full_text(ticker, accession_number, primary_document, as_of_date=as_of_date)
 
 
-TOOL_DISPATCH = {
-    "get_filings_metadata": _tool_get_filings_metadata,
-    "get_financial_facts": _tool_get_financial_facts,
-    "get_filing_full_text": _tool_get_filing_full_text,
-}
+def _build_tool_dispatch(as_of_date: date | None) -> dict:
+    # as_of_date is baked in here via functools.partial rather than exposed as a tool
+    # parameter — the LLM never sees or has to remember to pass it; every call it makes
+    # automatically respects the cutoff.
+    return {
+        "get_filings_metadata": functools.partial(_tool_get_filings_metadata, as_of_date=as_of_date),
+        "get_financial_facts": functools.partial(_tool_get_financial_facts, as_of_date=as_of_date),
+        "get_filing_full_text": functools.partial(_tool_get_filing_full_text, as_of_date=as_of_date),
+    }
 
 
-def run(ticker: str) -> FilingsAnalysis:
+def run(ticker: str, as_of_date: date | None = None) -> FilingsAnalysis:
+    system_prompt = SYSTEM_PROMPT
+    if as_of_date is not None:
+        system_prompt += (
+            f"\n\nYou are analyzing data as of {as_of_date.isoformat()}. Do not reference or "
+            "assume knowledge of anything after this date."
+        )
     return run_tool_agent(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         tools=TOOLS,
-        tool_dispatch=TOOL_DISPATCH,
+        tool_dispatch=_build_tool_dispatch(as_of_date),
         user_prompt=f"Analyze recent SEC filings for {ticker}.",
         output_schema=FilingsAnalysis,
         model=SPECIALIST_MODEL,
@@ -136,5 +150,6 @@ def run(ticker: str) -> FilingsAnalysis:
 
 if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "LMT"
-    analysis = run(ticker)
+    as_of = date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else None
+    analysis = run(ticker, as_of_date=as_of)
     print(analysis.model_dump_json(indent=2))

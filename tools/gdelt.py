@@ -10,6 +10,7 @@ backoff on 429s.
 import hashlib
 import json
 import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -19,6 +20,13 @@ BASE_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
 CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# How far back to look when as_of_date is set. GDELT requires startdatetime and
+# enddatetime together (verified live — passing enddatetime alone errors with "Query has
+# end date with no start date"), so an as_of_date query needs an explicit start too;
+# without as_of_date, GDELT's default un-dated search already returns a comparable
+# multi-month spread, so this just mirrors that for the point-in-time case.
+AS_OF_LOOKBACK_DAYS = 180
 
 # Company name to search for — GDELT searches article text, so use recognizable names.
 SEARCH_TERMS = {
@@ -70,14 +78,31 @@ def _get_with_retry(params: dict, max_retries: int = 4) -> dict:
     raise RuntimeError("GDELT request failed after retries.")
 
 
-def _avg_tone(query_term: str) -> tuple[float | None, int]:
+def _date_range_params(as_of_date: date | None) -> dict:
+    if as_of_date is None:
+        return {}
+    end = datetime.combine(as_of_date, datetime.max.time().replace(microsecond=0))
+    start = end - timedelta(days=AS_OF_LOOKBACK_DAYS)
+    return {
+        "startdatetime": start.strftime("%Y%m%d%H%M%S"),
+        "enddatetime": end.strftime("%Y%m%d%H%M%S"),
+    }
+
+
+def _avg_tone(query_term: str, as_of_date: date | None = None) -> tuple[float | None, int]:
     """
     GDELT's artlist mode (used by get_recent_articles) doesn't include a per-article
     tone score — tone is only exposed in aggregate via mode=tonechart, a histogram of
     {bin: tone value, count: articles at that tone} over the full matching set for the
     query (not capped by maxrecords). Compute a count-weighted average from that.
+
+    KNOWN LIMITATION when as_of_date is set: unlike _search()'s articles, tonechart bins
+    carry no per-article date, so the ~1-day server-side date-cutoff slop documented in
+    _search() can't be corrected for here client-side. avg_tone may include up to ~1 day
+    of data past as_of_date; treat it as approximate near the cutoff, unlike the articles
+    list itself, which is exactly enforced.
     """
-    params = {"query": query_term, "mode": "tonechart", "format": "json"}
+    params = {"query": query_term, "mode": "tonechart", "format": "json", **_date_range_params(as_of_date)}
     data = _get_with_retry(params)
     bins = data.get("tonechart", [])
     total_count = sum(b.get("count", 0) for b in bins)
@@ -87,41 +112,56 @@ def _avg_tone(query_term: str) -> tuple[float | None, int]:
     return weighted_sum / total_count, total_count
 
 
-def _search(ticker: str, query_term: str, max_records: int) -> dict:
+def _search(ticker: str, query_term: str, max_records: int, as_of_date: date | None = None) -> dict:
     params = {
         "query": query_term,
         "mode": "artlist",
         "maxrecords": max_records,
         "format": "json",
         "sort": "datedesc",
+        **_date_range_params(as_of_date),
     }
 
     data = _get_with_retry(params)
-    avg_tone, tone_sample_size = _avg_tone(query_term)
+    avg_tone, tone_sample_size = _avg_tone(query_term, as_of_date=as_of_date)
+    articles = data.get("articles", [])
+
+    if as_of_date is not None:
+        # GDELT's enddatetime is verified-live to be soft, not a hard cutoff — a raw,
+        # uncached query with enddatetime=2026-06-01T23:59:59Z still returned articles
+        # dated 2026-06-02, nearly a full day past the requested cutoff. Server-side
+        # date params narrow the candidate set, but don't rely on them alone — always
+        # re-filter client-side on each article's actual seendate to guarantee the cutoff.
+        cutoff = as_of_date.strftime("%Y%m%d")
+        articles = [a for a in articles if a.get("seendate", "99999999")[:8] <= cutoff]
 
     return {
         "ticker": ticker.upper(),
         "query_term": query_term,
-        "articles": data.get("articles", []),
+        "articles": articles,
         "avg_tone": avg_tone,
         "tone_sample_size": tone_sample_size,
+        "as_of_date": as_of_date.isoformat() if as_of_date else None,
     }
 
 
-def get_recent_articles(ticker: str, max_records: int = 20) -> dict:
+def get_recent_articles(ticker: str, max_records: int = 20, as_of_date: date | None = None) -> dict:
     """
     Fetch recent news articles mentioning the company (headline, url, domain,
     sourcecountry, etc. — whatever GDELT's artlist response includes), plus an
     aggregate tone score computed separately (see _avg_tone). Uses SEARCH_TERMS'
     default query for the ticker — see refine_search() to override it.
+
+    as_of_date, if given, restricts results to a AS_OF_LOOKBACK_DAYS window ending at
+    that date (GDELT requires an explicit start/end pair for date-bounded queries).
     """
     query_term = SEARCH_TERMS.get(ticker.upper())
     if not query_term:
         raise ValueError(f"No search term mapped for {ticker}. Add it to SEARCH_TERMS in tools/gdelt.py")
-    return _search(ticker, query_term, max_records)
+    return _search(ticker, query_term, max_records, as_of_date=as_of_date)
 
 
-def refine_search(ticker: str, custom_query: str, max_records: int = 20) -> dict:
+def refine_search(ticker: str, custom_query: str, max_records: int = 20, as_of_date: date | None = None) -> dict:
     """
     Same as get_recent_articles(), but with a caller-supplied query instead of the
     default SEARCH_TERMS lookup — for when the default query's results are too noisy to
@@ -129,7 +169,7 @@ def refine_search(ticker: str, custom_query: str, max_records: int = 20) -> dict
     tighter or differently-scoped query is warranted, e.g. narrowing "Lockheed Martin" to
     '"Lockheed Martin" -stock -forum'. Same caching/retry pattern as get_recent_articles.
     """
-    return _search(ticker, custom_query, max_records)
+    return _search(ticker, custom_query, max_records, as_of_date=as_of_date)
 
 
 def get_article_text(url: str, max_chars: int = 1500) -> str | None:

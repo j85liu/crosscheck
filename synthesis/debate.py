@@ -20,6 +20,7 @@ extraction work.
 """
 
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -171,6 +172,7 @@ def verify(
     sentiment: SentimentAnalysis,
     risk: RiskAnalysis,
     osint: OSINTAnalysis | None = None,
+    as_of_date: date | None = None,
 ) -> SynthesisReport:
     """
     Check every key finding and contradiction in draft_report against the actual source
@@ -203,6 +205,11 @@ def verify(
         risk_anomaly_description=risk.anomaly_description,
         osint_section=_format_osint_section(osint),
     )
+    if as_of_date is not None:
+        prompt = (
+            f"You are fact-checking a report analyzing data as of {as_of_date.isoformat()}. Do not "
+            f"reference or assume knowledge of anything after this date.\n\n{prompt}"
+        )
 
     # Much bigger budget than the draft call: verify's output echoes both the original
     # claim and (for overstated items) a corrected_claim, plus a note, for every finding
@@ -255,6 +262,7 @@ def run(
     sentiment: SentimentAnalysis,
     risk: RiskAnalysis,
     osint: OSINTAnalysis | None = None,
+    as_of_date: date | None = None,
 ) -> SynthesisReport:
     osint_section = ""
     if osint and osint.summary != "OSINT agent not yet implemented — placeholder output.":
@@ -269,10 +277,15 @@ def run(
         risk_summary=risk.summary,
         osint_section=osint_section,
     )
+    if as_of_date is not None:
+        prompt = (
+            f"You are synthesizing a report analyzing data as of {as_of_date.isoformat()}. Do not "
+            f"reference or assume knowledge of anything after this date.\n\n{prompt}"
+        )
 
     result_dict = structured_call(prompt, model=REASONING_MODEL, max_tokens=4096)
     draft_report = SynthesisReport(**result_dict)
-    return verify(draft_report, filings, program, sentiment, risk, osint)
+    return verify(draft_report, filings, program, sentiment, risk, osint, as_of_date=as_of_date)
 
 
 if __name__ == "__main__":

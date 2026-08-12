@@ -8,7 +8,9 @@ then fetches full text on a handful of the most relevant articles before charact
 sentiment.
 """
 
+import functools
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -112,12 +114,12 @@ TOOLS = [
 ]
 
 
-def _tool_get_recent_articles(ticker: str) -> dict:
-    return get_recent_articles(ticker, max_records=20)
+def _tool_get_recent_articles(ticker: str, as_of_date: date | None) -> dict:
+    return get_recent_articles(ticker, max_records=20, as_of_date=as_of_date)
 
 
-def _tool_refine_search(ticker: str, custom_query: str) -> dict:
-    return refine_search(ticker, custom_query, max_records=20)
+def _tool_refine_search(ticker: str, custom_query: str, as_of_date: date | None) -> dict:
+    return refine_search(ticker, custom_query, max_records=20, as_of_date=as_of_date)
 
 
 def _tool_get_article_text(url: str) -> str:
@@ -125,23 +127,34 @@ def _tool_get_article_text(url: str) -> str:
     return text if text is not None else "Error: could not fetch article text (paywall, timeout, or dead link)."
 
 
-TOOL_DISPATCH = {
-    "get_recent_articles": _tool_get_recent_articles,
-    "refine_search": _tool_refine_search,
-    "get_article_text": _tool_get_article_text,
-}
+def _build_tool_dispatch(as_of_date: date | None) -> dict:
+    # as_of_date is baked in via functools.partial for the two search tools — the LLM
+    # never sees or has to remember to pass it. get_article_text has no date concept of
+    # its own (it fetches whatever URL it's given, already sourced from an as_of_date
+    # -filtered search), so it needs no binding.
+    return {
+        "get_recent_articles": functools.partial(_tool_get_recent_articles, as_of_date=as_of_date),
+        "refine_search": functools.partial(_tool_refine_search, as_of_date=as_of_date),
+        "get_article_text": _tool_get_article_text,
+    }
 
 
-def run(ticker: str) -> SentimentAnalysis:
+def run(ticker: str, as_of_date: date | None = None) -> SentimentAnalysis:
+    system_prompt = SYSTEM_PROMPT
+    if as_of_date is not None:
+        system_prompt += (
+            f"\n\nYou are analyzing data as of {as_of_date.isoformat()}. Do not reference or "
+            "assume knowledge of anything after this date."
+        )
     # Higher than the harness default (5): a realistic run here is 1 search + up to a
     # couple of refinements + several individual get_article_text calls + submission,
     # each typically a separate turn (results usually need to be seen before deciding
     # the next call) — 5 wasn't enough headroom, observed directly in testing (a noisy
     # ticker exhausted 5 turns on search/refinement alone and never reached submission).
     return run_tool_agent(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         tools=TOOLS,
-        tool_dispatch=TOOL_DISPATCH,
+        tool_dispatch=_build_tool_dispatch(as_of_date),
         user_prompt=f"Analyze recent news sentiment for {ticker}.",
         output_schema=SentimentAnalysis,
         model=SPECIALIST_MODEL,
@@ -151,5 +164,6 @@ def run(ticker: str) -> SentimentAnalysis:
 
 if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "LMT"
-    analysis = run(ticker)
+    as_of = date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else None
+    analysis = run(ticker, as_of_date=as_of)
     print(analysis.model_dump_json(indent=2))

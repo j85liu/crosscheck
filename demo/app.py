@@ -6,11 +6,13 @@ tool/agent instead of just seeing "it broke".
 Usage:
     python demo/app.py LMT
     python demo/app.py LMT RTX NOC RKLB
+    python demo/app.py LMT --as-of 2026-06-01
 """
 
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -59,11 +61,11 @@ def summarize_agent(key: str, state: dict) -> str:
     return f"  [FAIL] {key:<10} {err or 'no output and no logged error (unexpected)'}"
 
 
-def run_ticker(ticker: str) -> None:
-    print(f"\n{'=' * 60}\n{ticker}\n{'=' * 60}")
+def run_ticker(ticker: str, as_of_date: date | None = None) -> None:
+    print(f"\n{'=' * 60}\n{ticker}{f' (as of {as_of_date.isoformat()})' if as_of_date else ''}\n{'=' * 60}")
     start = time.perf_counter()
     try:
-        state = orchestrator.run_for_ticker(ticker)
+        state = orchestrator.run_for_ticker(ticker, as_of_date=as_of_date)
     except Exception as e:
         print(f"  [FAIL] pipeline crashed after {time.perf_counter() - start:.1f}s: {e}")
         return
@@ -106,10 +108,33 @@ def run_ticker(ticker: str) -> None:
                 print(f'        -> corrected to: "{f.corrected_claim}"')
 
 
+def _parse_args(argv: list[str]) -> tuple[list[str], date | None]:
+    """Parse CLI args: tickers plus an optional --as-of YYYY-MM-DD flag."""
+    tickers = []
+    as_of_date = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--as-of":
+            if i + 1 >= len(argv):
+                print("--as-of requires a date argument, e.g. --as-of 2026-06-01")
+                sys.exit(1)
+            try:
+                as_of_date = date.fromisoformat(argv[i + 1])
+            except ValueError:
+                print(f"Invalid --as-of date {argv[i + 1]!r}, expected YYYY-MM-DD")
+                sys.exit(1)
+            i += 2
+        else:
+            tickers.append(arg.upper())
+            i += 1
+    return tickers, as_of_date
+
+
 def main() -> None:
-    tickers = [t.upper() for t in sys.argv[1:]]
+    tickers, as_of_date = _parse_args(sys.argv[1:])
     if not tickers:
-        print("Usage: python demo/app.py TICKER [TICKER ...]")
+        print("Usage: python demo/app.py TICKER [TICKER ...] [--as-of YYYY-MM-DD]")
         print(f"Supported tickers: {', '.join(SUPPORTED_TICKERS)}")
         sys.exit(1)
 
@@ -123,7 +148,7 @@ def main() -> None:
         sys.exit(1)
 
     for ticker in tickers:
-        run_ticker(ticker)
+        run_ticker(ticker, as_of_date=as_of_date)
 
 
 if __name__ == "__main__":
